@@ -447,6 +447,36 @@ namespace AzureADConnectConfigDocumenter
         public abstract Tuple<string, string> GetReport();
 
         /// <summary>
+        /// Gets the XPath for "mv-data" node
+        /// </summary>
+        /// <param name="pilotConfig">if set to <c>true</c>, the pilot configuration is loaded. Otherwise, the production configuration is loaded.</param>
+        /// <returns>Returns "mv-data" XPath</returns>
+        protected static string GetMetaverseXmlRootXPath(bool pilotConfig)
+        {
+            return (pilotConfig ? "/Pilot" : "/Production") + "/GlobalSettings/child::*";
+        }
+
+        /// <summary>
+        /// Gets the XPath for "ma-data" node
+        /// </summary>
+        /// <param name="pilotConfig">if set to <c>true</c>, the pilot configuration is loaded. Otherwise, the production configuration is loaded.</param>
+        /// <returns>Returns "ma-data" XPath</returns>
+        protected static string GetConnectorXmlRootXPath(bool pilotConfig)
+        {
+            return (pilotConfig ? "/Pilot" : "/Production") + "/Connectors";
+        }
+
+        /// <summary>
+        /// Gets the XPath for "synchronizationRule" node
+        /// </summary>
+        /// <param name="pilotConfig">if set to <c>true</c>, the pilot configuration is loaded. Otherwise, the production configuration is loaded.</param>
+        /// <returns>Returns "synchronizationRule" XPath</returns>
+        protected static string GetSynchronizationRuleXmlRootXPath(bool pilotConfig)
+        {
+            return (pilotConfig ? "/Pilot" : "/Production") + "/SynchronizationRules";
+        }
+
+        /// <summary>
         /// Gets the Bookmark code for the specified bookmark text.
         /// </summary>
         /// <param name="text">The Bookmark text.</param>
@@ -640,9 +670,18 @@ namespace AzureADConnectConfigDocumenter
                     }
                     else if (!Documenter.IsCumulativeRowStateChanged(row, i))
                     {
-                        var dataRelationName = string.Format(CultureInfo.InvariantCulture, "DataRelation{0}{1}", i, i + 1);
-                        var parentRow = row.GetParentRow(dataRelationName);
-                        row[Documenter.HtmlTableRowVisibilityStatusColumn] = parentRow[Documenter.HtmlTableRowVisibilityStatusColumn];
+                        try
+                        {
+                            var dataRelationName = string.Format(CultureInfo.InvariantCulture, "DataRelation{0}{1}", i, i + 1);
+                            var parentRow = row.GetParentRow(dataRelationName);
+                            row[Documenter.HtmlTableRowVisibilityStatusColumn] = parentRow[Documenter.HtmlTableRowVisibilityStatusColumn];
+                        }
+                        catch (DataException e)
+                        {
+                            var rowString = (row != null) ? string.Join("|", row.ItemArray) : string.Empty;
+                            var errorMsg = e.Message + " Data Row: " + rowString + e.StackTrace;
+                            Logger.Instance.WriteError(errorMsg);
+                        }
                     }
                 }
 
@@ -724,7 +763,11 @@ namespace AzureADConnectConfigDocumenter
                 foreach (var row in modifiedPilotRows)
                 {
                     // Match the unmodified version of the row via the PrimaryKey
-                    var matchInProductionTable = modifiedProductionRows.Where(mondifiedProductionRow => productionTable.PrimaryKey.Aggregate(true, (match, keyColumn) => match && mondifiedProductionRow[keyColumn].Equals(row[keyColumn.Ordinal]))).First();
+                    ////var matchInProductionTable = modifiedProductionRows.Where(mondifiedProductionRow => productionTable.PrimaryKey.Aggregate(true, (match, keyColumn) => match && mondifiedProductionRow[keyColumn].Equals(row[keyColumn.Ordinal]))).First();
+                    // revised query for perf improvements
+                    var matchInProductionTable = (from productionRow in productionTable.AsEnumerable()
+                                                 where productionTable.PrimaryKey.Aggregate(true, (match, keyColumn) => match && productionRow[keyColumn].Equals(row[keyColumn.Ordinal]))
+                                                 select productionRow).First();
                     var newRow = diffgramTable.NewRow();
                     newRow[Documenter.RowStateColumn] = DataRowState.Modified;
 
@@ -1283,9 +1326,9 @@ namespace AzureADConnectConfigDocumenter
 
                 this.WriteDocumenterInfo();
 
-                var syncVersionXPath = "//mv-data//parameter-values/parameter[@name = 'Microsoft.Synchronize.ServerConfigurationVersion']";
-                var syncVersionPilot = (string)this.PilotXml.XPathSelectElement(syncVersionXPath);
-                var syncVersionProduction = (string)this.ProductionXml.XPathSelectElement(syncVersionXPath);
+                var syncVersionXPath = "/mv-data//parameter-values/parameter[@name = 'Microsoft.Synchronize.ServerConfigurationVersion']";
+                var syncVersionPilot = (string)this.PilotXml.XPathSelectElement(Documenter.GetMetaverseXmlRootXPath(true) + syncVersionXPath);
+                var syncVersionProduction = (string)this.ProductionXml.XPathSelectElement(Documenter.GetMetaverseXmlRootXPath(false) + syncVersionXPath);
                 var cellClass = (syncVersionPilot == syncVersionProduction ? DataRowState.Unchanged : DataRowState.Modified).ToString();
 
                 this.ReportWriter.WriteFullBeginTag("strong");
@@ -1294,7 +1337,7 @@ namespace AzureADConnectConfigDocumenter
                     this.ReportWriter.WriteBeginTag("span");
                     this.ReportWriter.WriteAttribute("class", cellClass);
                     this.ReportWriter.WriteLine(HtmlTextWriter.TagRightChar);
-                    this.ReportWriter.Write("(" + syncVersionPilot + ")");
+                    this.ReportWriter.Write("(" + syncVersionPilot + "):");
                     this.ReportWriter.WriteEndTag("span");
                 }
 
@@ -1315,7 +1358,7 @@ namespace AzureADConnectConfigDocumenter
                     this.ReportWriter.WriteBeginTag("span");
                     this.ReportWriter.WriteAttribute("class", cellClass);
                     this.ReportWriter.WriteLine(HtmlTextWriter.TagRightChar);
-                    this.ReportWriter.Write("(" + syncVersionProduction + ")");
+                    this.ReportWriter.Write("(" + syncVersionProduction + "):");
                     this.ReportWriter.WriteEndTag("span");
                 }
 
@@ -1427,6 +1470,7 @@ namespace AzureADConnectConfigDocumenter
                 this.ReportWriter.WriteBeginTag("input");
                 this.ReportWriter.WriteAttribute("type", "checkbox");
                 this.ReportWriter.WriteAttribute("id", "OnlyShowChanges");
+                this.ReportWriter.WriteAttribute("disabled", null);
                 this.ReportWriter.WriteAttribute("onclick", "ToggleVisibility();");
                 this.ReportWriter.WriteLine(HtmlTextWriter.SelfClosingTagEnd);
 
@@ -1438,6 +1482,30 @@ namespace AzureADConnectConfigDocumenter
                 this.ReportWriter.Write(HtmlTextWriter.TagRightChar);
                 this.ReportWriter.Write("Download Sync Rule Changes Script");
                 this.ReportWriter.WriteEndTag("a");
+
+                this.WriteBreakTag();
+
+                this.ReportWriter.WriteFullBeginTag("strong");
+                this.ReportWriter.Write("Hide Default Sync Rules:");
+                this.ReportWriter.WriteEndTag("strong");
+
+                this.ReportWriter.WriteBeginTag("input");
+                this.ReportWriter.WriteAttribute("type", "checkbox");
+                this.ReportWriter.WriteAttribute("id", "HideDefaultSyncRules");
+                this.ReportWriter.WriteAttribute("disabled", null);
+                this.ReportWriter.WriteAttribute("onclick", "ToggleDefaultRuleVisibility();");
+                this.ReportWriter.WriteLine(HtmlTextWriter.SelfClosingTagEnd);
+
+                this.ReportWriter.WriteFullBeginTag("strong");
+                this.ReportWriter.Write("Hide End-to-end Summary Flows:");
+                this.ReportWriter.WriteEndTag("strong");
+
+                this.ReportWriter.WriteBeginTag("input");
+                this.ReportWriter.WriteAttribute("type", "checkbox");
+                this.ReportWriter.WriteAttribute("id", "HideEndToEndFlowsSummary");
+                this.ReportWriter.WriteAttribute("disabled", null);
+                this.ReportWriter.WriteAttribute("onclick", "ToggleEndToEndFlowsSummaryVisibility();");
+                this.ReportWriter.WriteLine(HtmlTextWriter.SelfClosingTagEnd);
 
                 this.WriteBreakTag();
 
@@ -2068,8 +2136,7 @@ namespace AzureADConnectConfigDocumenter
                     {
                         this.ReportWriter.WriteBeginTag("col");
                         this.ReportWriter.WriteAttribute("style", "width:" + columnWidth + "%;");
-                        this.ReportWriter.Write(HtmlTextWriter.TagRightChar);
-                        this.ReportWriter.WriteEndTag("col");
+                        this.ReportWriter.Write(HtmlTextWriter.SelfClosingTagEnd);
                     }
                 }
 

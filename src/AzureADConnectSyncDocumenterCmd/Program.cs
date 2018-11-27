@@ -25,14 +25,29 @@ namespace AzureADConnectConfigDocumenter
         /// <param name="args">The command-line arguments.</param>
         public static void Main(string[] args)
         {
-            if (args == null || args.Length < 2)
+            try
             {
-                string errorMsg = string.Format(CultureInfo.CurrentUICulture, "Usage: {0} {1} {2}.", new object[] { Assembly.GetExecutingAssembly().GetName().Name, "{Pilot / Target Config Folder}", "{Production / Reference / Baseline Config Folder}" });
-                throw new ArgumentException(errorMsg, "args");
-            }
+                if (args == null || args.Length < 2)
+                {
+                    var errorMsg = string.Format(CultureInfo.CurrentUICulture, "Missing commnad-line arguments. Usage: {0} {1} {2}.", new object[] { Assembly.GetExecutingAssembly().GetName().Name, "{Pilot / Target Config Folder}", "{Production / Reference / Baseline Config Folder}" });
+                    Console.Error.WriteLine(errorMsg);
 
-            var documenter = new AzureADConnectSyncDocumenter(args[0], args[1]);
-            documenter.GenerateReport();
+                    errorMsg = string.Format(CultureInfo.CurrentUICulture, "Example: \t{0} {1} {2} {3}", new object[] { Environment.NewLine, Assembly.GetExecutingAssembly().GetName().Name, "\"Contoso\\Pilot\"", "\"Contoso\\Production\"" });
+                    Console.Error.WriteLine(errorMsg);
+
+                    Console.ReadKey();
+                    return;
+                }
+
+                var documenter = new AzureADConnectSyncDocumenter(args[0], args[1]);
+                documenter.GenerateReport();
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine(e.ToString());
+                Console.WriteLine("Press any key to exit...");
+                Console.ReadKey();
+            }
         }
     }
 }

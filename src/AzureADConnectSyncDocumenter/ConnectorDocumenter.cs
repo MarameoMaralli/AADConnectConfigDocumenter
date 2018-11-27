@@ -11,12 +11,15 @@
 namespace AzureADConnectConfigDocumenter
 {
     using System;
+    using System.Collections.Generic;
     using System.Collections.Specialized;
+    using System.Configuration;
     using System.Data;
     using System.Diagnostics.CodeAnalysis;
     using System.Globalization;
     using System.IO;
     using System.Linq;
+    using System.Text.RegularExpressions;
     using System.Web.UI;
     using System.Xml.Linq;
     using System.Xml.XPath;
@@ -47,6 +50,11 @@ namespace AzureADConnectConfigDocumenter
         protected const string LoggerContextItemConnectorSubType = "Connector SubType";
 
         /// <summary>
+        /// The data source object type currently being processed
+        /// </summary>
+        private string currentDataSourceObjectType;
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="ConnectorDocumenter" /> class.
         /// </summary>
         /// <param name="pilotXml">The pilot configuration XML.</param>
@@ -64,8 +72,8 @@ namespace AzureADConnectConfigDocumenter
                 this.ConnectorName = connectorName;
                 this.Environment = configEnvironment;
 
-                string xpath = "//ma-data[name ='" + this.ConnectorName + "']";
-                var connector = configEnvironment == ConfigEnvironment.ProductionOnly ? this.ProductionXml.XPathSelectElement(xpath, Documenter.NamespaceManager) : this.PilotXml.XPathSelectElement(xpath, Documenter.NamespaceManager);
+                string xpath = "/ma-data[name ='" + this.ConnectorName + "']";
+                var connector = configEnvironment == ConfigEnvironment.ProductionOnly ? this.ProductionXml.XPathSelectElement(Documenter.GetConnectorXmlRootXPath(false) + xpath, Documenter.NamespaceManager) : this.PilotXml.XPathSelectElement(Documenter.GetConnectorXmlRootXPath(true) + xpath, Documenter.NamespaceManager);
 
                 this.ConnectorGuid = (string)connector.Element("id");
                 this.ConnectorCategory = (string)connector.Element("category");
@@ -121,12 +129,13 @@ namespace AzureADConnectConfigDocumenter
         /// <param name="currentConnectorGuid">The current connector unique identifier.</param>
         /// <param name="direction">The direction.</param>
         /// <param name="reportType">Type of the report.</param>
+        /// <param name="pilotConfig">if set to <c>true</c>, the pilot configuration is loaded. Otherwise, the production configuration is loaded.</param>
         /// <returns>The sync rule xpath.</returns>
-        protected static string GetSyncRuleXPath(string currentConnectorGuid, SyncRuleDocumenter.SyncRuleDirection direction, SyncRuleDocumenter.SyncRuleReportType reportType)
+        protected static string GetSyncRuleXPath(string currentConnectorGuid, SyncRuleDocumenter.SyncRuleDirection direction, SyncRuleDocumenter.SyncRuleReportType reportType, bool pilotConfig)
         {
-            Logger.Instance.WriteMethodEntry("Current Connector Guid: '{0}'. Sync Rule Direction: '{1}'.  Sync Rule Report Type: '{2}'.", currentConnectorGuid, direction, reportType);
+            Logger.Instance.WriteMethodEntry("Current Connector Guid: '{0}'. Sync Rule Direction: '{1}'.  Sync Rule Report Type: '{2}'. Pilot Config: '{3}'.", currentConnectorGuid, direction, reportType, pilotConfig);
 
-            var xpath = "//synchronizationRule[translate(connector, '" + Documenter.LowercaseLetters + "', '" + Documenter.UppercaseLetters + "') = '" + currentConnectorGuid + "' and direction = '" + direction.ToString() + "'";
+            var xpath = Documenter.GetSynchronizationRuleXmlRootXPath(pilotConfig) + "/synchronizationRule[translate(connector, '" + Documenter.LowercaseLetters + "', '" + Documenter.UppercaseLetters + "') = '" + currentConnectorGuid + "' and direction = '" + direction.ToString() + "'";
             try
             {
                 switch (reportType)
@@ -149,7 +158,7 @@ namespace AzureADConnectConfigDocumenter
             }
             finally
             {
-                Logger.Instance.WriteMethodExit("Current Connector Guid: '{0}'. Sync Rule Direction: '{1}'.  Sync Rule Report Type: '{2}'. XPath: '{3}'.", currentConnectorGuid, direction, reportType, xpath);
+                Logger.Instance.WriteMethodExit("Current Connector Guid: '{0}'. Sync Rule Direction: '{1}'.  Sync Rule Report Type: '{2}'. Pilot Config: '{3}'. XPath: '{4}'.", currentConnectorGuid, direction, reportType, pilotConfig, xpath);
             }
         }
 
@@ -367,7 +376,7 @@ namespace AzureADConnectConfigDocumenter
 
                 var table = dataSet.Tables[0];
 
-                var connector = config.XPathSelectElement("//ma-data[name ='" + this.ConnectorName + "']");
+                var connector = config.XPathSelectElement(Documenter.GetConnectorXmlRootXPath(pilotConfig) + "/ma-data[name ='" + this.ConnectorName + "']");
 
                 if (connector != null)
                 {
@@ -482,7 +491,7 @@ namespace AzureADConnectConfigDocumenter
 
                 var table = dataSet.Tables[0];
 
-                var mappings = config.XPathSelectElements("//ma-data[name ='" + this.ConnectorName + "']/component_mappings/mapping");
+                var mappings = config.XPathSelectElements(Documenter.GetConnectorXmlRootXPath(pilotConfig) + "/ma-data[name ='" + this.ConnectorName + "']/component_mappings/mapping");
 
                 foreach (var mapping in mappings)
                 {
@@ -674,7 +683,7 @@ namespace AzureADConnectConfigDocumenter
                 var config = pilotConfig ? this.PilotXml : this.ProductionXml;
                 var dataSet = pilotConfig ? this.PilotDataSet : this.ProductionDataSet;
 
-                var connector = config.XPathSelectElement("//ma-data[name ='" + this.ConnectorName + "']");
+                var connector = config.XPathSelectElement(Documenter.GetConnectorXmlRootXPath(pilotConfig) + "/ma-data[name ='" + this.ConnectorName + "']");
 
                 if (connector != null)
                 {
@@ -853,7 +862,7 @@ namespace AzureADConnectConfigDocumenter
 
                 var table = dataSet.Tables[0];
 
-                var objectTypes = config.XPathSelectElements("//ma-data[name ='" + this.ConnectorName + "']/ma-partition-data/partition[position() = 1]/filter/object-classes/object-class");
+                var objectTypes = config.XPathSelectElements(Documenter.GetConnectorXmlRootXPath(pilotConfig) + "/ma-data[name ='" + this.ConnectorName + "']/ma-partition-data/partition[position() = 1]/filter/object-classes/object-class");
 
                 foreach (var objectType in objectTypes)
                 {
@@ -915,6 +924,8 @@ namespace AzureADConnectConfigDocumenter
                 this.CreateSimpleSettingsDiffgram();
 
                 this.PrintConnectorSelectedAttributes();
+
+                this.ProcessConnectorAttributeFlowsSummary();
             }
             finally
             {
@@ -935,7 +946,7 @@ namespace AzureADConnectConfigDocumenter
                 var config = pilotConfig ? this.PilotXml : this.ProductionXml;
                 var dataSet = pilotConfig ? this.PilotDataSet : this.ProductionDataSet;
 
-                var connector = config.XPathSelectElement("//ma-data[name ='" + this.ConnectorName + "']");
+                var connector = config.XPathSelectElement(Documenter.GetConnectorXmlRootXPath(pilotConfig) + "/ma-data[name ='" + this.ConnectorName + "']");
 
                 if (connector != null)
                 {
@@ -949,8 +960,8 @@ namespace AzureADConnectConfigDocumenter
                         var attributeInfo = connector.XPathSelectElement(".//dsml:attribute-type[dsml:name = '" + attributeName + "']", Documenter.NamespaceManager);
                         if (attributeInfo != null)
                         {
-                            var hasInboundFlows = config.XPathSelectElement("//synchronizationRule[translate(connector, '" + Documenter.LowercaseLetters + "', '" + Documenter.UppercaseLetters + "') = '" + currentConnectorGuid + "' and direction = 'Inbound' " + Documenter.SyncRuleDisabledCondition + "]/attribute-mappings/mapping/src[attr = '" + attributeName + "']") != null;
-                            var hasOutboundFlows = config.XPathSelectElements("//synchronizationRule[translate(connector, '" + Documenter.LowercaseLetters + "', '" + Documenter.UppercaseLetters + "') = '" + currentConnectorGuid + "' and direction = 'Outbound' " + Documenter.SyncRuleDisabledCondition + "]/attribute-mappings/mapping[dest = '" + attributeName + "']") != null;
+                            var hasInboundFlows = config.XPathSelectElements(Documenter.GetSynchronizationRuleXmlRootXPath(pilotConfig) + "/synchronizationRule[translate(connector, '" + Documenter.LowercaseLetters + "', '" + Documenter.UppercaseLetters + "') = '" + currentConnectorGuid + "' and direction = 'Inbound' " + Documenter.SyncRuleDisabledCondition + "]/attribute-mappings/mapping/src[attr = '" + attributeName + "']").Count() != 0;
+                            var hasOutboundFlows = config.XPathSelectElements(Documenter.GetSynchronizationRuleXmlRootXPath(pilotConfig) + "/synchronizationRule[translate(connector, '" + Documenter.LowercaseLetters + "', '" + Documenter.UppercaseLetters + "') = '" + currentConnectorGuid + "' and direction = 'Outbound' " + Documenter.SyncRuleDisabledCondition + "]/attribute-mappings/mapping[dest = '" + attributeName + "']").Count() != 0;
 
                             var row = table.NewRow();
 
@@ -999,6 +1010,1051 @@ namespace AzureADConnectConfigDocumenter
         }
 
         #endregion Selected Atrributes
+
+        #region Attribute Flows Summary
+
+        /// <summary>
+        /// Processes the connector import and export attribute flows.
+        /// </summary>
+        protected void ProcessConnectorAttributeFlowsSummary()
+        {
+            Logger.Instance.WriteMethodEntry();
+
+            try
+            {
+                this.ReportWriter.WriteBeginTag("div");
+                this.ReportWriter.WriteAttribute("class", "EndToEndFlowsSummary");
+                this.ReportWriter.Write(HtmlTextWriter.TagRightChar);
+                this.ReportToCWriter.WriteBeginTag("div");
+                this.ReportToCWriter.WriteAttribute("class", "EndToEndFlowsSummary");
+                this.ReportToCWriter.Write(HtmlTextWriter.TagRightChar);
+
+                var sectionTitle = "End-to-End Attribute Flows Summary";
+
+                Logger.Instance.WriteInfo("Processing " + sectionTitle + ".");
+
+                this.WriteSectionHeader(sectionTitle, 3);
+
+                var configSetting = ConfigurationManager.AppSettings["SuppressConnectorImportExportEndToEndFlows"];
+                if (!string.IsNullOrEmpty(configSetting) && configSetting.Equals("true", StringComparison.OrdinalIgnoreCase))
+                {
+                    Logger.Instance.WriteWarning(string.Format(CultureInfo.InvariantCulture, "!!WARNING!! SuppressConnectorImportExportEndToEndFlows = '{0}'.", configSetting));
+                    this.WriteContentParagraph("The documentation of this section is suppressed via config setting.", "Highlight");
+                    return;
+                }
+
+                var objectTypeXPath = "/ma-data[name ='" + this.ConnectorName + "']/ma-partition-data/partition[position() = 1]/filter/object-classes/object-class";
+                var pilotObjectTypes = from objectClass in this.PilotXml.XPathSelectElements(Documenter.GetConnectorXmlRootXPath(true) + objectTypeXPath)
+                                       let objectType = (string)objectClass
+                                       orderby objectType
+                                       select objectType;
+
+                foreach (var objectType in pilotObjectTypes)
+                {
+                    this.currentDataSourceObjectType = objectType;
+                    this.ProcessConnectorObjectAttributeFlowsSummary();
+                }
+
+                var productionObjectTypes = from objectClass in this.ProductionXml.XPathSelectElements(Documenter.GetConnectorXmlRootXPath(false) + objectTypeXPath)
+                                            let objectType = (string)objectClass
+                                            orderby objectType
+                                            select objectType;
+
+                productionObjectTypes = productionObjectTypes.Where(productionObjectType => !pilotObjectTypes.Contains(productionObjectType));
+
+                foreach (var objectType in productionObjectTypes)
+                {
+                    this.currentDataSourceObjectType = objectType;
+                    this.ProcessConnectorObjectAttributeFlowsSummary();
+                }
+            }
+            finally
+            {
+                this.ReportWriter.WriteEndTag("div");
+                this.ReportToCWriter.WriteEndTag("div");
+
+                Logger.Instance.WriteMethodExit();
+            }
+        }
+
+        /// <summary>
+        /// Processes connector object attribute flows summary
+        /// </summary>
+        [SuppressMessage("Microsoft.Design", "CA1031:DoNotCatchGeneralExceptionTypes", Justification = "Reviewed. Ignored.")]
+        protected void ProcessConnectorObjectAttributeFlowsSummary()
+        {
+            Logger.Instance.WriteMethodEntry();
+
+            try
+            {
+                this.ProcessConnectorObjectImportAttributeFlowsSummary();
+                this.ProcessConnectorObjectExportAttributeFlowsSummary();
+
+                if (this.DiffgramDataSets[0].Tables[0].Rows.Count != 0 || this.DiffgramDataSets[1].Tables[0].Rows.Count != 0)
+                {
+                    this.WriteSectionHeader(this.currentDataSourceObjectType, 4);
+                }
+
+                if (this.DiffgramDataSets[0].Tables[0].Rows.Count != 0)
+                {
+                    this.WriteSectionHeader("Import Flows", 5, "Import Flows", this.ConnectorGuid + this.currentDataSourceObjectType);
+
+                    this.DiffgramDataSet = this.DiffgramDataSets[0];
+                    this.PrintCreateConnectorObjectImportAttributeFlowsSummary();
+                }
+
+                if (this.DiffgramDataSets[1].Tables[0].Rows.Count != 0)
+                {
+                    this.WriteSectionHeader("Export Flows", 5, "Export Flows", this.ConnectorGuid + this.currentDataSourceObjectType);
+
+                    this.DiffgramDataSet = this.DiffgramDataSets[1];
+                    this.PrintCreateConnectorObjectExportAttributeFlowsSummary();
+                }
+            }
+            catch (Exception e)
+            {
+                Logger.Instance.WriteError("Error while processing end-to-end attribute flows. Current Object Type: {0}. Error: {1}", this.currentDataSourceObjectType, e.ToString());
+            }
+            finally
+            {
+                this.ResetDiffgram();
+                Logger.Instance.WriteMethodExit();
+            }
+        }
+
+        #region Import Attribute Flows Summary
+
+        /// <summary>
+        /// Processes connector object import attribute flows summary
+        /// </summary>
+        protected void ProcessConnectorObjectImportAttributeFlowsSummary()
+        {
+            Logger.Instance.WriteMethodEntry();
+
+            try
+            {
+                Logger.Instance.WriteInfo("Processing End to End Import Attribute Flows Summary. This may take a few minutes...");
+
+                this.CreateConnectorObjectImportAttributeFlowsSummaryDataSets();
+
+                this.FillConnectorObjectImportAttributeFlowsSummary(true);
+                this.FillConnectorObjectImportAttributeFlowsSummary(false);
+
+                this.CreateConnectorObjectImportAttributeFlowsSummaryDiffgram();
+
+                ////this.PrintCreateConnectorObjectImportAttributeFlowsSummary();
+            }
+            finally
+            {
+                Logger.Instance.WriteMethodExit();
+            }
+        }
+
+        /// <summary>
+        /// Creates connector object import attribute flows summary
+        /// </summary>
+        [SuppressMessage("Microsoft.Reliability", "CA2000:Dispose objects before losing scope", Justification = "No good reason to call Dispose() on DataTable and DataColumn.")]
+        protected void CreateConnectorObjectImportAttributeFlowsSummaryDataSets()
+        {
+            Logger.Instance.WriteMethodEntry();
+
+            try
+            {
+                var table = new DataTable("MetaverseAttributes") { Locale = CultureInfo.InvariantCulture };
+
+                var column1 = new DataColumn("MetaverseAttribute");
+                var column2 = new DataColumn("FlowDirection");
+
+                table.Columns.Add(column1);
+                table.Columns.Add(column2);
+                table.PrimaryKey = new[] { column1 };
+
+                var table2 = new DataTable("InboundSyncRules") { Locale = CultureInfo.InvariantCulture };
+
+                var column12 = new DataColumn("MetaverseAttribute");
+                var column22 = new DataColumn("Source");
+                var column32 = new DataColumn("InboundSyncRule");
+                var column42 = new DataColumn("InboundSyncRulePrecedence", typeof(int));
+                var column52 = new DataColumn("InboundSyncRuleScopingCondition");
+                var column62 = new DataColumn("InboundSyncRuleGuid");
+
+                table2.Columns.Add(column12);
+                table2.Columns.Add(column22);
+                table2.Columns.Add(column32);
+                table2.Columns.Add(column42);
+                table2.Columns.Add(column52);
+                table2.Columns.Add(column62);
+                table2.PrimaryKey = new[] { column12, column32 };
+
+                var table3 = new DataTable("MetaverseAttributes2") { Locale = CultureInfo.InvariantCulture };
+
+                var column13 = new DataColumn("MetaverseAttribute"); // needed for cascading - see table 4 comments
+                var column23 = new DataColumn("InboundSyncRule");
+                var column33 = new DataColumn("FlowDirection");
+
+                table3.Columns.Add(column13);
+                table3.Columns.Add(column23);
+                table3.Columns.Add(column33);
+                table3.PrimaryKey = new[] { column13 };
+
+                var table4 = new DataTable("MetaverseObjectTypeOutboundFlows") { Locale = CultureInfo.InvariantCulture };
+
+                var column14 = new DataColumn("MetaverseAttribute");
+                var column24 = new DataColumn("InboundSyncRule");
+                var column34 = new DataColumn("Source");
+                var column44 = new DataColumn("TargetAttribute");
+                var column54 = new DataColumn("OutboundSyncRulePrecedence", typeof(int));
+                var column64 = new DataColumn("OutboundSyncRule");
+                var column74 = new DataColumn("TargetConnector");
+                var column84 = new DataColumn("OutboundSyncRuleSyncRuleScopingCondition");
+                var column94 = new DataColumn("TargetConnectorGuid");
+                var column104 = new DataColumn("OutboundSyncRuleSyncRuleGuid");
+
+                table4.Columns.Add(column14);
+                table4.Columns.Add(column24);
+                table4.Columns.Add(column34);
+                table4.Columns.Add(column44);
+                table4.Columns.Add(column54);
+                table4.Columns.Add(column64);
+                table4.Columns.Add(column74);
+                table4.Columns.Add(column84);
+                table4.Columns.Add(column94);
+                table4.Columns.Add(column104);
+                table4.PrimaryKey = new[] { column14, column44, column64, column74 }; // column24 is excluded as we'll insert only one row in the the parent table.
+
+                this.PilotDataSet = new DataSet("ImportAttributeFlowsSummary") { Locale = CultureInfo.InvariantCulture };
+                this.PilotDataSet.Tables.Add(table);
+                this.PilotDataSet.Tables.Add(table2);
+                this.PilotDataSet.Tables.Add(table3);
+                this.PilotDataSet.Tables.Add(table4);
+
+                var dataRelation12 = new DataRelation("DataRelation12", new[] { column1 }, new[] { column12 }, false);
+                var dataRelation23 = new DataRelation("DataRelation23", new[] { column12, column32 }, new[] { column13, column23 }, false);
+                var dataRelation34 = new DataRelation("DataRelation34", new[] { column13, column23 }, new[] { column14, column24 }, false);
+
+                this.PilotDataSet.Relations.Add(dataRelation12);
+                this.PilotDataSet.Relations.Add(dataRelation23);
+                this.PilotDataSet.Relations.Add(dataRelation34);
+
+                this.ProductionDataSet = this.PilotDataSet.Clone();
+
+                var printTable = this.GetConnectorObjectImportAttributeFlowsSummaryPrintTable();
+                this.PilotDataSet.Tables.Add(printTable);
+                this.ProductionDataSet.Tables.Add(printTable.Copy());
+            }
+            finally
+            {
+                Logger.Instance.WriteMethodExit();
+            }
+        }
+
+        /// <summary>
+        /// Gets the connector object import attribute flows summary print table.
+        /// </summary>
+        /// <returns>The connector object import attribute flows summary print table.</returns>
+        protected DataTable GetConnectorObjectImportAttributeFlowsSummaryPrintTable()
+        {
+            Logger.Instance.WriteMethodEntry();
+
+            try
+            {
+                var printTable = Documenter.GetPrintTable();
+
+                // Table 1
+                // Metaverse Attribute
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 0 }, { "ColumnIndex", 0 }, { "Hidden", false }, { "SortOrder", 0 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Flow Direction
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 0 }, { "ColumnIndex", 1 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", true } }).Values.Cast<object>().ToArray());
+
+                // Table 2
+                // Source
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 1 }, { "ColumnIndex", 1 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Sync Rule
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 1 }, { "ColumnIndex", 2 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", 5 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Precedence
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 1 }, { "ColumnIndex", 3 }, { "Hidden", true }, { "SortOrder", 0 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Sync Rule Scoping Condition
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 1 }, { "ColumnIndex", 4 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Sync Rule Guid
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 1 }, { "ColumnIndex", 5 }, { "Hidden", true }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", true } }).Values.Cast<object>().ToArray());
+
+                // Table 3
+                // Metaverse Attribute
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 2 }, { "ColumnIndex", 0 }, { "Hidden", false }, { "SortOrder", 0 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Inbound Sync Rule Name
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 2 }, { "ColumnIndex", 1 }, { "Hidden", true }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", true } }).Values.Cast<object>().ToArray());
+
+                // Flow Direction
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 2 }, { "ColumnIndex", 2 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", true } }).Values.Cast<object>().ToArray());
+
+                // Table 4
+                // Inbound Sync Rule Name
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 3 }, { "ColumnIndex", 1 }, { "Hidden", true }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", true } }).Values.Cast<object>().ToArray());
+
+                // Source
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 3 }, { "ColumnIndex", 2 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Target Attribute
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 3 }, { "ColumnIndex", 3 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Outbound Sync Rule Precedence
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 3 }, { "ColumnIndex", 4 }, { "Hidden", true }, { "SortOrder", 0 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Outbound Sync Rule
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 3 }, { "ColumnIndex", 5 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", 9 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Target Connector
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 3 }, { "ColumnIndex", 6 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", 8 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Outbound Sync Rule Scoping Condition
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 3 }, { "ColumnIndex", 7 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Target Connector Guid
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 3 }, { "ColumnIndex", 8 }, { "Hidden", true }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", true } }).Values.Cast<object>().ToArray());
+
+                // Outbound Sync Rule Guid
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 3 }, { "ColumnIndex", 9 }, { "Hidden", true }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", true } }).Values.Cast<object>().ToArray());
+
+                printTable.AcceptChanges();
+
+                return printTable;
+            }
+            finally
+            {
+                Logger.Instance.WriteMethodExit();
+            }
+        }
+
+        /// <summary>
+        /// Fills the connector object import attribute flows summary data set.
+        /// </summary>
+        /// <param name="pilotConfig">if set to <c>true</c>, the pilot configuration is loaded. Otherwise, the production configuration is loaded.</param>
+        protected void FillConnectorObjectImportAttributeFlowsSummary(bool pilotConfig)
+        {
+            Logger.Instance.WriteMethodEntry("Pilot Config: '{0}'.", pilotConfig);
+
+            try
+            {
+                var config = pilotConfig ? this.PilotXml : this.ProductionXml;
+                var dataSet = pilotConfig ? this.PilotDataSet : this.ProductionDataSet;
+
+                var table = dataSet.Tables[0];
+                var table2 = dataSet.Tables[1];
+                var table3 = dataSet.Tables[2];
+                var table4 = dataSet.Tables[3];
+
+                var connector = config.XPathSelectElement(Documenter.GetConnectorXmlRootXPath(pilotConfig) + "/ma-data[name ='" + this.ConnectorName + "']");
+
+                if (connector != null)
+                {
+                    var connectorGuid = ((string)connector.Element("id") ?? string.Empty).ToUpperInvariant();
+                    var metaverseAttributesXPath = Documenter.GetSynchronizationRuleXmlRootXPath(pilotConfig) + "/synchronizationRule[translate(connector, '" + Documenter.LowercaseLetters + "', '" + Documenter.UppercaseLetters + "') = '" + connectorGuid + "' and direction = 'Inbound' " + Documenter.SyncRuleDisabledCondition + " and sourceObjectType = '" + this.currentDataSourceObjectType + "']/attribute-mappings/mapping/dest";
+                    var metaverseAttributes = from inboundSyncRuleDestination in config.XPathSelectElements(metaverseAttributesXPath)
+                                              let dest = (string)inboundSyncRuleDestination
+                                              orderby dest
+                                              select dest;
+                    foreach (var metaverseAttribute in metaverseAttributes.Distinct())
+                    {
+                        Documenter.AddRow(table, new object[] { metaverseAttribute, "&#8592;" });
+
+                        var inboundSyncRuleXPath = Documenter.GetSynchronizationRuleXmlRootXPath(pilotConfig) + "/synchronizationRule[translate(connector, '" + Documenter.LowercaseLetters + "', '" + Documenter.UppercaseLetters + "') = '" + connectorGuid + "' and direction = 'Inbound' " + Documenter.SyncRuleDisabledCondition + " and sourceObjectType = '" + this.currentDataSourceObjectType + "' and ./attribute-mappings/mapping/dest = '" + metaverseAttribute + "']";
+                        var inboundSyncRules = config.XPathSelectElements(inboundSyncRuleXPath);
+                        inboundSyncRules = from syncRule in inboundSyncRules
+                                           let inboundSyncRulePrecedence = (int)syncRule.Element("precedence")
+                                           orderby inboundSyncRulePrecedence
+                                           select syncRule;
+
+                        var inboundSyncRuleRank = 0; // Used only for sorting, not displayed on the report
+                        foreach (var inboundSyncRule in inboundSyncRules)
+                        {
+                            var inboundSyncRuleName = (string)inboundSyncRule.Element("name");
+                            var inboundSyncRuleGuid = (string)inboundSyncRule.Element("id");
+                            var targetObjectType = (string)inboundSyncRule.Element("targetObjectType");
+                            ++inboundSyncRuleRank;
+
+                            var transformation = inboundSyncRule.XPathSelectElement("./attribute-mappings/mapping[dest = '" + metaverseAttribute + "']");
+                            var expression = (string)transformation.Element("expression");
+                            var srcAttribute = (string)transformation.XPathSelectElement("src/attr");
+                            var src = (string)transformation.XPathSelectElement("src");
+                            var source = !string.IsNullOrEmpty(expression) ? expression : !string.IsNullOrEmpty(srcAttribute) ? srcAttribute : src;
+
+                            var inboundSyncRuleScopingConditions = inboundSyncRule.XPathSelectElements("./synchronizationCriteria/conditions");
+                            var inboundSyncRuleScopingConditionString = string.Empty;
+                            var inboundSyncRuleScopingConditionsCount = inboundSyncRuleScopingConditions.Count();
+                            if (inboundSyncRuleScopingConditionsCount != 0)
+                            {
+                                var conditionIndex = -1;
+                                foreach (var condition in inboundSyncRuleScopingConditions)
+                                {
+                                    ++conditionIndex;
+                                    var scopes = condition.Elements("scope");
+                                    inboundSyncRuleScopingConditionString += scopes.Select(scope => string.Format(CultureInfo.InvariantCulture, "{0} {1} {2}", (string)scope.Element("csAttribute"), (string)scope.Element("csOperator"), (string)scope.Element("csValue"))).Aggregate((i, j) => i + " AND " + j);
+                                    if (conditionIndex < inboundSyncRuleScopingConditionsCount - 1)
+                                    {
+                                        inboundSyncRuleScopingConditionString += " OR ";
+                                    }
+                                }
+                            }
+
+                            Documenter.AddRow(table2, new object[] { metaverseAttribute, source, inboundSyncRuleName, inboundSyncRuleRank, inboundSyncRuleScopingConditionString, inboundSyncRuleGuid });
+
+                            if (table3.Select("MetaverseAttribute = '" + metaverseAttribute + "'").Count() == 0)
+                            {
+                                Documenter.AddRow(table3, new object[] { metaverseAttribute, inboundSyncRuleName, "&#8594;" });
+
+                                // Outbound metaverse flows
+                                var outboundSyncRules = config.XPathSelectElements(Documenter.GetSynchronizationRuleXmlRootXPath(pilotConfig) + "/synchronizationRule[sourceObjectType = '" + targetObjectType + "' and direction = 'Outbound' " + Documenter.SyncRuleDisabledCondition + " and (attribute-mappings/mapping/src/attr = '" + metaverseAttribute + "' or contains(attribute-mappings/mapping/expression, '[" + metaverseAttribute + "]'))]");
+                                outboundSyncRules = from syncRule in outboundSyncRules
+                                                    let outboundSyncRulePrecedence = (int)syncRule.Element("precedence")
+                                                    orderby outboundSyncRulePrecedence
+                                                    select syncRule;
+                                var outboundSyncRuleRank = 0;
+                                foreach (var outboundSyncRule in outboundSyncRules)
+                                {
+                                    var outboundSyncRuleName = (string)outboundSyncRule.Element("name");
+                                    var outboundSyncRuleGuid = (string)outboundSyncRule.Element("id");
+                                    var outboundConnectorGuid = ((string)outboundSyncRule.Element("connector") ?? string.Empty).ToUpperInvariant();
+                                    var outboundConnectorName = (string)config.XPathSelectElement(Documenter.GetConnectorXmlRootXPath(pilotConfig) + "/ma-data[translate(id, '" + Documenter.LowercaseLetters + "', '" + Documenter.UppercaseLetters + "') = '" + outboundConnectorGuid + "']/name");
+                                    if (string.IsNullOrEmpty(outboundConnectorName))
+                                    {
+                                        Logger.Instance.WriteWarning(string.Format(CultureInfo.InvariantCulture, "Unable to dereferece connector: '{0}'. The documentation of outbound flows will be skipped for this connector. PilotConfig: '{1}'.", outboundConnectorGuid, pilotConfig));
+                                        continue;
+                                    }
+
+                                    ++outboundSyncRuleRank; // Used only for sorting, not displayed on the report
+
+                                    var targetAttributeMapping = outboundSyncRule.XPathSelectElement("attribute-mappings/mapping[./src/attr = '" + metaverseAttribute + "' or contains(expression, '[" + metaverseAttribute + "]')]");
+                                    var mappingExpression = (string)targetAttributeMapping.XPathSelectElement("./expression");
+                                    var mappingSourceAttribute = (string)targetAttributeMapping.XPathSelectElement("./src/attr");
+                                    var mappingSource = (string)targetAttributeMapping.XPathSelectElement("./src");
+                                    var targetAttribute = (string)targetAttributeMapping.XPathSelectElement("./dest");
+                                    var metaverseSource = (string)mappingExpression ?? (string)mappingSourceAttribute ?? (string)mappingSource ?? string.Empty;
+                                    if (!string.IsNullOrEmpty(metaverseSource))
+                                    {
+                                        var outboundSyncRuleScopingConditions = outboundSyncRule.XPathSelectElements("./synchronizationCriteria/conditions");
+                                        var outboundSyncRuleScopingCondition = string.Empty;
+                                        var outboundSyncRuleScopingConditionCount = outboundSyncRuleScopingConditions.Count();
+                                        if (outboundSyncRuleScopingConditionCount != 0)
+                                        {
+                                            var conditionIndex = -1;
+                                            foreach (var condition in outboundSyncRuleScopingConditions)
+                                            {
+                                                ++conditionIndex;
+                                                var scopes = condition.Elements("scope");
+                                                outboundSyncRuleScopingCondition += scopes.Select(scope => string.Format(CultureInfo.InvariantCulture, "{0} {1} {2}", (string)scope.Element("csAttribute"), (string)scope.Element("csOperator"), (string)scope.Element("csValue"))).Aggregate((i, j) => i + " AND " + j);
+                                                if (conditionIndex < outboundSyncRuleScopingConditionCount - 1)
+                                                {
+                                                    outboundSyncRuleScopingCondition += " OR ";
+                                                }
+                                            }
+                                        }
+
+                                        Documenter.AddRow(table4, new object[] { metaverseAttribute, inboundSyncRuleName, metaverseSource, targetAttribute, outboundSyncRuleRank, outboundSyncRuleName, outboundConnectorName, outboundSyncRuleScopingCondition, outboundConnectorGuid, outboundSyncRuleGuid });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                table.AcceptChanges();
+                table2.AcceptChanges();
+                table3.AcceptChanges();
+                table4.AcceptChanges();
+            }
+            finally
+            {
+                Logger.Instance.WriteMethodExit("Pilot Config: '{0}'.", pilotConfig);
+            }
+        }
+
+        /// <summary>
+        /// Creates the connector object import attribute flows summary difference gram.
+        /// </summary>
+        protected void CreateConnectorObjectImportAttributeFlowsSummaryDiffgram()
+        {
+            Logger.Instance.WriteMethodEntry();
+
+            try
+            {
+                this.DiffgramDataSet = Documenter.GetDiffgram(this.PilotDataSet, this.ProductionDataSet);
+                this.DiffgramDataSets.Add(this.DiffgramDataSet);
+            }
+            finally
+            {
+                Logger.Instance.WriteMethodExit();
+            }
+        }
+
+        /// <summary>
+        /// Gets the connector object import attribute flows summary header table.
+        /// </summary>
+        /// <returns>The connector object import attribute flows summary header table.</returns>
+        protected DataTable GetConnectorObjectImportAttributeFlowsSummaryHeaderTable()
+        {
+            Logger.Instance.WriteMethodEntry();
+
+            try
+            {
+                var headerTable = Documenter.GetHeaderTable();
+
+                // Header Row 1
+                // Import Flows
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 0 }, { "ColumnIndex", 0 }, { "ColumnName", "Import Flows" }, { "RowSpan", 1 }, { "ColSpan", 5 }, { "ColWidth", 0 } }).Values.Cast<object>().ToArray());
+
+                // Export Flows
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 0 }, { "ColumnIndex", 1 }, { "ColumnName", "Export Flows" }, { "RowSpan", 1 }, { "ColSpan", 7 }, { "ColWidth", 0 } }).Values.Cast<object>().ToArray());
+
+                // Header Row 2
+                // Metaverse attribute
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 0 }, { "ColumnName", "Metaverse Attribute" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 8 } }).Values.Cast<object>().ToArray());
+
+                // Flow Direction
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 1 }, { "ColumnName", "&#8592;" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 2 } }).Values.Cast<object>().ToArray());
+
+                // Source
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 2 }, { "ColumnName", "Connector Source" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 10 } }).Values.Cast<object>().ToArray());
+
+                // Inbound Sync Rule
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 3 }, { "ColumnName", "Inbound Sync Rule" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 10 } }).Values.Cast<object>().ToArray());
+
+                // Inbound Sync Rule Scoping Condition
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 4 }, { "ColumnName", "Inbound Sync Rule Scoping Condition" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 10 } }).Values.Cast<object>().ToArray());
+
+                // Metaverse attribute
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 5 }, { "ColumnName", "Metaverse Attribute" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 8 } }).Values.Cast<object>().ToArray());
+
+                // Flow Direction
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 6 }, { "ColumnName", "&#8594;" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 2 } }).Values.Cast<object>().ToArray());
+
+                // Source
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 7 }, { "ColumnName", "Source" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 10 } }).Values.Cast<object>().ToArray());
+
+                // Target
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 8 }, { "ColumnName", "Target" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 10 } }).Values.Cast<object>().ToArray());
+
+                // Outbound Sync Rule
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 9 }, { "ColumnName", "Outbound Sync Rule" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 10 } }).Values.Cast<object>().ToArray());
+
+                // Target Connector
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 10 }, { "ColumnName", "Target Connector" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 10 } }).Values.Cast<object>().ToArray());
+
+                // Outbound Sync Rule Scoping Condition
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 11 }, { "ColumnName", "Outbound Sync Rule Scoping Condition" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 10 } }).Values.Cast<object>().ToArray());
+
+                headerTable.AcceptChanges();
+
+                return headerTable;
+            }
+            finally
+            {
+                Logger.Instance.WriteMethodExit();
+            }
+        }
+
+        /// <summary>
+        /// Prints the connector object import attribute flows summary.
+        /// </summary>
+        protected void PrintCreateConnectorObjectImportAttributeFlowsSummary()
+        {
+            Logger.Instance.WriteMethodEntry();
+
+            try
+            {
+                if (this.DiffgramDataSet.Tables[0].Rows.Count != 0)
+                {
+                    var headerTable = this.GetConnectorObjectImportAttributeFlowsSummaryHeaderTable();
+                    this.WriteTable(this.DiffgramDataSet.Tables[0], headerTable, HtmlTableSize.Huge);
+                }
+            }
+            finally
+            {
+                ////this.ResetDiffgram(); // reset the diffgram variables
+                Logger.Instance.WriteMethodExit();
+            }
+        }
+
+        #endregion Import Attribute Flows Summary
+
+        #region Export Attribute Flows Summary
+
+        /// <summary>
+        /// Processes connector object export attribute flows summary
+        /// </summary>
+        protected void ProcessConnectorObjectExportAttributeFlowsSummary()
+        {
+            Logger.Instance.WriteMethodEntry();
+
+            try
+            {
+                Logger.Instance.WriteInfo("Processing End to End Export Attribute Flows Summary. This may take a few minutes...");
+
+                this.CreateConnectorObjectExportAttributeFlowsSummaryDataSets();
+
+                this.FillConnectorObjectExportAttributeFlowsSummary(true);
+                this.FillConnectorObjectExportAttributeFlowsSummary(false);
+
+                this.CreateConnectorObjectExportAttributeFlowsSummaryDiffgram();
+
+                ////this.PrintCreateConnectorObjectExportAttributeFlowsSummary();
+            }
+            finally
+            {
+                Logger.Instance.WriteMethodExit();
+            }
+        }
+
+        /// <summary>
+        /// Creates the connector object export attribute flows summary data sets.
+        /// </summary>
+        [SuppressMessage("Microsoft.Reliability", "CA2000:Dispose objects before losing scope", Justification = "No good reason to call Dispose() on DataTable and DataColumn.")]
+        protected void CreateConnectorObjectExportAttributeFlowsSummaryDataSets()
+        {
+            Logger.Instance.WriteMethodEntry();
+
+            try
+            {
+                var table = new DataTable("DataSourceAttributes") { Locale = CultureInfo.InvariantCulture };
+
+                var column1 = new DataColumn("DataSourceAttribute");
+                var column2 = new DataColumn("FlowDirection");
+
+                table.Columns.Add(column1);
+                table.Columns.Add(column2);
+                table.PrimaryKey = new[] { column1 };
+
+                var table2 = new DataTable("OutboundSyncRules") { Locale = CultureInfo.InvariantCulture };
+
+                var column12 = new DataColumn("DataSourceAttribute"); // to be able to do cascading data relations
+                var column22 = new DataColumn("Source");
+                var column32 = new DataColumn("OutboundSyncRule");
+                var column42 = new DataColumn("OutboundSyncRulePrecedence", typeof(int));
+                var column52 = new DataColumn("OutboundSyncRuleScopingCondition");
+                var column62 = new DataColumn("OutboundSyncRuleGuid");
+
+                table2.Columns.Add(column12);
+                table2.Columns.Add(column22);
+                table2.Columns.Add(column32);
+                table2.Columns.Add(column42);
+                table2.Columns.Add(column52);
+                table2.Columns.Add(column62);
+                table2.PrimaryKey = new[] { column12, column32 };
+
+                var table3 = new DataTable("MetaverseAttributes") { Locale = CultureInfo.InvariantCulture };
+
+                var column13 = new DataColumn("DataSourceAttribute");
+                var column23 = new DataColumn("OutboundSyncRule");
+                var column33 = new DataColumn("MetaverseAttribute");
+                var column43 = new DataColumn("FlowDirection");
+
+                table3.Columns.Add(column13);
+                table3.Columns.Add(column23);
+                table3.Columns.Add(column33);
+                table3.Columns.Add(column43);
+                table3.PrimaryKey = new[] { column13, column23, column33 };
+
+                var table4 = new DataTable("MetaverseObjectTypeInboundFlows") { Locale = CultureInfo.InvariantCulture };
+
+                var column14 = new DataColumn("DataSourceAttribute");
+                var column24 = new DataColumn("OutboundSyncRule");
+                var column34 = new DataColumn("MetaverseAttribute");
+                var column44 = new DataColumn("Source");
+                var column54 = new DataColumn("InboundSyncRulePrecedence", typeof(int));
+                var column64 = new DataColumn("InboundSyncRule");
+                var column74 = new DataColumn("SourceConnector");
+                var column84 = new DataColumn("InboundSyncRuleScopingCondition");
+                var column94 = new DataColumn("SourceConnectorGuid");
+                var column104 = new DataColumn("InboundSyncRuleGuid");
+
+                table4.Columns.Add(column14);
+                table4.Columns.Add(column24);
+                table4.Columns.Add(column34);
+                table4.Columns.Add(column44);
+                table4.Columns.Add(column54);
+                table4.Columns.Add(column64);
+                table4.Columns.Add(column74);
+                table4.Columns.Add(column84);
+                table4.Columns.Add(column94);
+                table4.Columns.Add(column104);
+                table4.PrimaryKey = new[] { column14, column34, column64, column74 }; // column24 is excluded as we'll insert only one row in the the parent table.
+
+                this.PilotDataSet = new DataSet("ExportAttributeFlowsSummary") { Locale = CultureInfo.InvariantCulture };
+                this.PilotDataSet.Tables.Add(table);
+                this.PilotDataSet.Tables.Add(table2);
+                this.PilotDataSet.Tables.Add(table3);
+                this.PilotDataSet.Tables.Add(table4);
+
+                var dataRelation12 = new DataRelation("DataRelation12", new[] { column1 }, new[] { column12 }, false);
+                var dataRelation23 = new DataRelation("DataRelation23", new[] { column12, column32 }, new[] { column13, column23 }, false);
+                var dataRelation34 = new DataRelation("DataRelation34", new[] { column13, column23, column33 }, new[] { column14, column24, column34 }, false);
+
+                this.PilotDataSet.Relations.Add(dataRelation12);
+                this.PilotDataSet.Relations.Add(dataRelation23);
+                this.PilotDataSet.Relations.Add(dataRelation34);
+
+                this.ProductionDataSet = this.PilotDataSet.Clone();
+
+                var printTable = this.GetConnectorObjectExportAttributeFlowsSummaryPrintTable();
+                this.PilotDataSet.Tables.Add(printTable);
+                this.ProductionDataSet.Tables.Add(printTable.Copy());
+            }
+            finally
+            {
+                Logger.Instance.WriteMethodExit();
+            }
+        }
+
+        /// <summary>
+        /// Gets the connector object export attribute flows summary print table.
+        /// </summary>
+        /// <returns>The connector object export attribute flows summary print table.</returns>
+        protected DataTable GetConnectorObjectExportAttributeFlowsSummaryPrintTable()
+        {
+            Logger.Instance.WriteMethodEntry();
+
+            try
+            {
+                var printTable = Documenter.GetPrintTable();
+
+                // Table 1
+                // DataSource Attribute
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 0 }, { "ColumnIndex", 0 }, { "Hidden", false }, { "SortOrder", 0 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Flow Direction
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 0 }, { "ColumnIndex", 1 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", true } }).Values.Cast<object>().ToArray());
+
+                // Table 2
+                // Source
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 1 }, { "ColumnIndex", 1 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Outbound Sync Rule
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 1 }, { "ColumnIndex", 2 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", 5 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Outbound Sync Rule Precedence
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 1 }, { "ColumnIndex", 3 }, { "Hidden", true }, { "SortOrder", 0 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Outbound Sync Rule Scoping Condition
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 1 }, { "ColumnIndex", 4 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Outbound Sync Rule Guid
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 1 }, { "ColumnIndex", 5 }, { "Hidden", true }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", true } }).Values.Cast<object>().ToArray());
+
+                // Table 3
+                // Outbound Sync Rule Name
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 2 }, { "ColumnIndex", 1 }, { "Hidden", true }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", true } }).Values.Cast<object>().ToArray());
+
+                // Metaverse Attribute
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 2 }, { "ColumnIndex", 2 }, { "Hidden", false }, { "SortOrder", 0 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Flow Direction
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 2 }, { "ColumnIndex", 3 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", true } }).Values.Cast<object>().ToArray());
+
+                // Table 4
+                // Outbound Sync Rule Name
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 3 }, { "ColumnIndex", 1 }, { "Hidden", true }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", true } }).Values.Cast<object>().ToArray());
+
+                // Source
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 3 }, { "ColumnIndex", 3 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Inbound Sync Rule Precedence
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 3 }, { "ColumnIndex", 4 }, { "Hidden", true }, { "SortOrder", 0 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Inbound Sync Rule
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 3 }, { "ColumnIndex", 5 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", 9 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Source Connector
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 3 }, { "ColumnIndex", 6 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", 8 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Inbound Sync Rule Scoping Condition
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 3 }, { "ColumnIndex", 7 }, { "Hidden", false }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", false } }).Values.Cast<object>().ToArray());
+
+                // Source Connector Guid
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 3 }, { "ColumnIndex", 8 }, { "Hidden", true }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", true } }).Values.Cast<object>().ToArray());
+
+                // Inbound Sync Rule Guid
+                printTable.Rows.Add((new OrderedDictionary { { "TableIndex", 3 }, { "ColumnIndex", 9 }, { "Hidden", true }, { "SortOrder", -1 }, { "BookmarkIndex", -1 }, { "JumpToBookmarkIndex", -1 }, { "ChangeIgnored", true } }).Values.Cast<object>().ToArray());
+
+                printTable.AcceptChanges();
+
+                return printTable;
+            }
+            finally
+            {
+                Logger.Instance.WriteMethodExit();
+            }
+        }
+
+        /// <summary>
+        /// Fills the connector object export attribute flows summary data set.
+        /// </summary>
+        /// <param name="pilotConfig">if set to <c>true</c>, the pilot configuration is loaded. Otherwise, the production configuration is loaded.</param>
+        protected void FillConnectorObjectExportAttributeFlowsSummary(bool pilotConfig)
+        {
+            Logger.Instance.WriteMethodEntry("Pilot Config: '{0}'.", pilotConfig);
+
+            try
+            {
+                var config = pilotConfig ? this.PilotXml : this.ProductionXml;
+                var dataSet = pilotConfig ? this.PilotDataSet : this.ProductionDataSet;
+
+                var table = dataSet.Tables[0];
+                var table2 = dataSet.Tables[1];
+                var table3 = dataSet.Tables[2];
+                var table4 = dataSet.Tables[3];
+
+                var connector = config.XPathSelectElement(Documenter.GetConnectorXmlRootXPath(pilotConfig) + "/ma-data[name ='" + this.ConnectorName + "']");
+
+                if (connector != null)
+                {
+                    var connectorGuid = ((string)connector.Element("id") ?? string.Empty).ToUpperInvariant();
+                    var targetAttributesXPath = Documenter.GetSynchronizationRuleXmlRootXPath(pilotConfig) + "/synchronizationRule[translate(connector, '" + Documenter.LowercaseLetters + "', '" + Documenter.UppercaseLetters + "') = '" + connectorGuid + "' and direction = 'Outbound' " + Documenter.SyncRuleDisabledCondition + " and targetObjectType = '" + this.currentDataSourceObjectType + "']/attribute-mappings/mapping/dest";
+                    var targetAttributes = from outboundSyncRuleDestination in config.XPathSelectElements(targetAttributesXPath)
+                                           let dest = (string)outboundSyncRuleDestination
+                                           orderby dest
+                                           select dest;
+
+                    foreach (var targetAttribute in targetAttributes.Distinct())
+                    {
+                        Documenter.AddRow(table, new object[] { targetAttribute, "&#8592;" });
+
+                        var outboundSyncRuleXPath = Documenter.GetSynchronizationRuleXmlRootXPath(pilotConfig) + "/synchronizationRule[translate(connector, '" + Documenter.LowercaseLetters + "', '" + Documenter.UppercaseLetters + "') = '" + connectorGuid + "' and direction = 'Outbound' " + Documenter.SyncRuleDisabledCondition + " and targetObjectType = '" + this.currentDataSourceObjectType + "' and ./attribute-mappings/mapping/dest = '" + targetAttribute + "']";
+                        var outboundSyncRules = config.XPathSelectElements(outboundSyncRuleXPath);
+                        outboundSyncRules = from syncRule in outboundSyncRules
+                                            let precedence = (int)syncRule.Element("precedence")
+                                            orderby precedence
+                                            select syncRule;
+
+                        var outboundSyncRuleRank = 0; // Used only for sorting, not displayed on the report
+                        foreach (var outboundSyncRule in outboundSyncRules)
+                        {
+                            var outboundSyncRuleName = (string)outboundSyncRule.Element("name");
+                            var outboundSyncRuleGuid = (string)outboundSyncRule.Element("id");
+                            var sourceObjectType = (string)outboundSyncRule.Element("sourceObjectType");
+                            ++outboundSyncRuleRank;
+
+                            var transformation = outboundSyncRule.XPathSelectElement("./attribute-mappings/mapping[dest = '" + targetAttribute + "']");
+                            var expression = (string)transformation.Element("expression");
+                            var srcAttribute = (string)transformation.XPathSelectElement("src/attr");
+                            var src = (string)transformation.XPathSelectElement("src");
+                            var source = !string.IsNullOrEmpty(expression) ? expression : !string.IsNullOrEmpty(srcAttribute) ? srcAttribute : src;
+
+                            var outboundSyncRuleScopingConditions = outboundSyncRule.XPathSelectElements("./synchronizationCriteria/conditions");
+                            var outboundSyncRuleScopingConditionString = string.Empty;
+                            var outboundSyncRuleScopingConditionsCount = outboundSyncRuleScopingConditions.Count();
+                            if (outboundSyncRuleScopingConditionsCount != 0)
+                            {
+                                var conditionIndex = -1;
+                                foreach (var condition in outboundSyncRuleScopingConditions)
+                                {
+                                    ++conditionIndex;
+                                    var scopes = condition.Elements("scope");
+                                    outboundSyncRuleScopingConditionString += scopes.Select(scope => string.Format(CultureInfo.InvariantCulture, "{0} {1} {2}", (string)scope.Element("csAttribute"), (string)scope.Element("csOperator"), (string)scope.Element("csValue"))).Aggregate((i, j) => i + " AND " + j);
+                                    if (conditionIndex < outboundSyncRuleScopingConditionsCount - 1)
+                                    {
+                                        outboundSyncRuleScopingConditionString += " OR ";
+                                    }
+                                }
+                            }
+
+                            Documenter.AddRow(table2, new object[] { targetAttribute, source, outboundSyncRuleName, outboundSyncRuleRank, outboundSyncRuleScopingConditionString, outboundSyncRuleGuid });
+
+                            var metaverseAttributes = new List<string>();
+                            if (!string.IsNullOrEmpty(expression))
+                            {
+                                foreach (Match match in Regex.Matches(expression, @"\[(.*?)\]"))
+                                {
+                                    metaverseAttributes.Add(match.Value.TrimStart('[').TrimEnd(']'));
+                                }
+                            }
+                            else if (!string.IsNullOrEmpty(srcAttribute))
+                            {
+                                metaverseAttributes.Add(srcAttribute);
+                            }
+
+                            foreach (var metaverseAttribute in metaverseAttributes)
+                            {
+                                if (table3.Select("DataSourceAttribute = '" + targetAttribute + "' and MetaverseAttribute = '" + metaverseAttribute + "'").Count() == 0)
+                                {
+                                    Documenter.AddRow(table3, new object[] { targetAttribute, outboundSyncRuleName, metaverseAttribute, "&#8592;" });
+
+                                    // Inbound metaverse flows
+                                    var inboundSyncRules = config.XPathSelectElements(Documenter.GetSynchronizationRuleXmlRootXPath(pilotConfig) + "/synchronizationRule[targetObjectType = '" + sourceObjectType + "' and direction = 'Inbound' " + Documenter.SyncRuleDisabledCondition + " and (attribute-mappings/mapping/dest = '" + metaverseAttribute + "' or contains(attribute-mappings/mapping/expression, '[" + metaverseAttribute + "]'))]");
+                                    inboundSyncRules = from syncRule in inboundSyncRules
+                                                       let inboundSyncRulePrecedence = (int)syncRule.Element("precedence")
+                                                       orderby inboundSyncRulePrecedence
+                                                       select syncRule;
+
+                                    var inboundSyncRuleRank = 0;
+                                    foreach (var inboundSyncRule in inboundSyncRules)
+                                    {
+                                        var inboundSyncRuleName = (string)inboundSyncRule.Element("name");
+                                        var inboundSyncRuleGuid = (string)inboundSyncRule.Element("id");
+                                        var inboundConnectorGuid = ((string)inboundSyncRule.Element("connector") ?? string.Empty).ToUpperInvariant();
+                                        var inboundConnectorName = (string)config.XPathSelectElement(Documenter.GetConnectorXmlRootXPath(pilotConfig) + "/ma-data[translate(id, '" + Documenter.LowercaseLetters + "', '" + Documenter.UppercaseLetters + "') = '" + inboundConnectorGuid + "']/name");
+                                        if (string.IsNullOrEmpty(inboundConnectorName))
+                                        {
+                                            Logger.Instance.WriteWarning(string.Format(CultureInfo.InvariantCulture, "Unable to dereferece connector: '{0}'. The documentation of inbound flows will be skipped for this connector. PilotConfig: '{1}'.", inboundConnectorGuid, pilotConfig));
+                                            continue;
+                                        }
+
+                                        ++inboundSyncRuleRank; // Used only for sorting, not displayed on the report
+
+                                        var metaverseAttributeMapping = inboundSyncRule.XPathSelectElement("attribute-mappings/mapping[dest = '" + metaverseAttribute + "' or contains(expression, '[" + metaverseAttribute + "]')]");
+                                        var mappingExpression = (string)metaverseAttributeMapping.XPathSelectElement("./expression");
+                                        var mappingSourceAttribute = (string)metaverseAttributeMapping.XPathSelectElement("./src/attr");
+                                        var mappingSource = (string)metaverseAttributeMapping.XPathSelectElement("./src");
+                                        var metaverseSource = (string)mappingExpression ?? (string)mappingSourceAttribute ?? (string)mappingSource ?? string.Empty;
+                                        if (!string.IsNullOrEmpty(metaverseSource))
+                                        {
+                                            var inboundSyncRuleScopingConditions = inboundSyncRule.XPathSelectElements("./synchronizationCriteria/conditions");
+                                            var inboundSyncRuleScopingCondition = string.Empty;
+                                            var inboundSyncRuleScopingConditionCount = inboundSyncRuleScopingConditions.Count();
+                                            if (inboundSyncRuleScopingConditionCount != 0)
+                                            {
+                                                var conditionIndex = -1;
+                                                foreach (var condition in inboundSyncRuleScopingConditions)
+                                                {
+                                                    ++conditionIndex;
+                                                    var scopes = condition.Elements("scope");
+                                                    inboundSyncRuleScopingCondition += scopes.Select(scope => string.Format(CultureInfo.InvariantCulture, "{0} {1} {2}", (string)scope.Element("csAttribute"), (string)scope.Element("csOperator"), (string)scope.Element("csValue"))).Aggregate((i, j) => i + " AND " + j);
+                                                    if (conditionIndex < inboundSyncRuleScopingConditionCount - 1)
+                                                    {
+                                                        inboundSyncRuleScopingCondition += " OR ";
+                                                    }
+                                                }
+                                            }
+
+                                            Documenter.AddRow(table4, new object[] { targetAttribute, outboundSyncRuleName, metaverseAttribute, metaverseSource, inboundSyncRuleRank, inboundSyncRuleName, inboundConnectorName, inboundSyncRuleScopingCondition, inboundConnectorGuid, inboundSyncRuleGuid });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                table.AcceptChanges();
+                table2.AcceptChanges();
+                table3.AcceptChanges();
+            }
+            finally
+            {
+                Logger.Instance.WriteMethodExit("Pilot Config: '{0}'.", pilotConfig);
+            }
+        }
+
+        /// <summary>
+        /// Creates the connector object export attribute flows summary difference gram.
+        /// </summary>
+        protected void CreateConnectorObjectExportAttributeFlowsSummaryDiffgram()
+        {
+            Logger.Instance.WriteMethodEntry();
+
+            try
+            {
+                this.DiffgramDataSet = Documenter.GetDiffgram(this.PilotDataSet, this.ProductionDataSet);
+                this.DiffgramDataSets.Add(this.DiffgramDataSet);
+            }
+            finally
+            {
+                Logger.Instance.WriteMethodExit();
+            }
+        }
+
+        /// <summary>
+        /// Gets the connector object export attribute flows summary header table.
+        /// </summary>
+        /// <returns>The connector object export attribute flows summary header table.</returns>
+        protected DataTable GetConnectorObjectExportAttributeFlowsSummaryHeaderTable()
+        {
+            Logger.Instance.WriteMethodEntry();
+
+            try
+            {
+                var headerTable = Documenter.GetHeaderTable();
+
+                // Header Row 1
+                // Export Flows
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 0 }, { "ColumnIndex", 0 }, { "ColumnName", "Export Flows" }, { "RowSpan", 1 }, { "ColSpan", 5 }, { "ColWidth", 0 } }).Values.Cast<object>().ToArray());
+
+                // Import Flows
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 0 }, { "ColumnIndex", 1 }, { "ColumnName", "Import Flows" }, { "RowSpan", 1 }, { "ColSpan", 6 }, { "ColWidth", 0 } }).Values.Cast<object>().ToArray());
+
+                // Header Row 2
+                // DataSource Attribute
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 0 }, { "ColumnName", "CS Attribute" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 10 } }).Values.Cast<object>().ToArray());
+
+                // Flow Direction
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 1 }, { "ColumnName", "&#8592;" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 2 } }).Values.Cast<object>().ToArray());
+
+                // Source
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 2 }, { "ColumnName", "Source" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 10 } }).Values.Cast<object>().ToArray());
+
+                // Outbound Sync Rule
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 3 }, { "ColumnName", "Outbound Sync Rule" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 10 } }).Values.Cast<object>().ToArray());
+
+                // Outbound Sync Rule Scoping Condition
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 4 }, { "ColumnName", "Outbound Sync Rule Scoping Condition" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 13 } }).Values.Cast<object>().ToArray());
+
+                // Metaverse attribute
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 5 }, { "ColumnName", "Metaverse Attribute" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 10 } }).Values.Cast<object>().ToArray());
+
+                // Flow Direction
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 6 }, { "ColumnName", "&#8592;" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 2 } }).Values.Cast<object>().ToArray());
+
+                // Source
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 7 }, { "ColumnName", "Source" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 10 } }).Values.Cast<object>().ToArray());
+
+                // Inbound Sync Rule
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 8 }, { "ColumnName", "Inbound Sync Rule" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 10 } }).Values.Cast<object>().ToArray());
+
+                // Source Connector
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 9 }, { "ColumnName", "Source Connector" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 10 } }).Values.Cast<object>().ToArray());
+
+                // Inbound Sync Rule Scoping Condition
+                headerTable.Rows.Add((new OrderedDictionary { { "RowIndex", 1 }, { "ColumnIndex", 10 }, { "ColumnName", "Inbound Sync Rule Scoping Condition" }, { "RowSpan", 1 }, { "ColSpan", 1 }, { "ColWidth", 15 } }).Values.Cast<object>().ToArray());
+
+                headerTable.AcceptChanges();
+
+                return headerTable;
+            }
+            finally
+            {
+                Logger.Instance.WriteMethodExit();
+            }
+        }
+
+        /// <summary>
+        /// Prints the connector object export attribute flows summary.
+        /// </summary>
+        protected void PrintCreateConnectorObjectExportAttributeFlowsSummary()
+        {
+            Logger.Instance.WriteMethodEntry();
+
+            try
+            {
+                if (this.DiffgramDataSet.Tables[0].Rows.Count != 0)
+                {
+                    var headerTable = this.GetConnectorObjectExportAttributeFlowsSummaryHeaderTable();
+                    this.WriteTable(this.DiffgramDataSet.Tables[0], headerTable, HtmlTableSize.Huge);
+                }
+            }
+            finally
+            {
+                ////this.ResetDiffgram(); // reset the diffgram variables
+                Logger.Instance.WriteMethodExit();
+            }
+        }
+
+        #endregion Export Attribute Flows Summary
+
+        #endregion Attribute Flows Summary
 
         #region Provisioning Sync Rules
 
@@ -1114,14 +2170,14 @@ namespace AzureADConnectConfigDocumenter
                 this.WriteSectionHeader(direction.ToString(), 4, direction.ToString() + sectionTitle, this.ConnectorGuid);
 
                 var sectionPrinted = false;
-                var pilotConnector = this.PilotXml.XPathSelectElement("//ma-data[name ='" + this.ConnectorName + "']");
-                var productionConnector = this.ProductionXml.XPathSelectElement("//ma-data[name ='" + this.ConnectorName + "']");
+                var pilotConnector = this.PilotXml.XPathSelectElement(Documenter.GetConnectorXmlRootXPath(true) + "/ma-data[name ='" + this.ConnectorName + "']");
+                var productionConnector = this.ProductionXml.XPathSelectElement(Documenter.GetConnectorXmlRootXPath(false) + "/ma-data[name ='" + this.ConnectorName + "']");
 
                 var pilotConnectorGuid = pilotConnector != null ? ((string)pilotConnector.Element("id") ?? string.Empty).ToUpperInvariant() : string.Empty;
                 var productionConnectorGuid = productionConnector != null ? ((string)productionConnector.Element("id") ?? string.Empty).ToUpperInvariant() : string.Empty;
 
-                var pilotSyncRules = this.PilotXml.XPathSelectElements(ConnectorDocumenter.GetSyncRuleXPath(pilotConnectorGuid, direction, reportType));
-                var productionSyncRules = this.ProductionXml.XPathSelectElements(ConnectorDocumenter.GetSyncRuleXPath(productionConnectorGuid, direction, reportType));
+                var pilotSyncRules = this.PilotXml.XPathSelectElements(ConnectorDocumenter.GetSyncRuleXPath(pilotConnectorGuid, direction, reportType, true));
+                var productionSyncRules = this.ProductionXml.XPathSelectElements(ConnectorDocumenter.GetSyncRuleXPath(productionConnectorGuid, direction, reportType, false));
 
                 // Sort by name
                 pilotSyncRules = from syncRule in pilotSyncRules
@@ -1195,10 +2251,10 @@ namespace AzureADConnectConfigDocumenter
 
                 this.WriteSectionHeader(sectionTitle, 3);
 
-                var xpath = "//ma-data[name ='" + this.ConnectorName + "']/ma-run-data/run-configuration";
+                var xpath = "/ma-data[name ='" + this.ConnectorName + "']/ma-run-data/run-configuration";
 
-                var pilot = this.PilotXml.XPathSelectElements(xpath, Documenter.NamespaceManager);
-                var production = this.ProductionXml.XPathSelectElements(xpath, Documenter.NamespaceManager);
+                var pilot = this.PilotXml.XPathSelectElements(Documenter.GetConnectorXmlRootXPath(true) + xpath, Documenter.NamespaceManager);
+                var production = this.ProductionXml.XPathSelectElements(Documenter.GetConnectorXmlRootXPath(false) + xpath, Documenter.NamespaceManager);
 
                 var connectorHasRunProfilesConfigured = false;
 
@@ -1376,7 +2432,7 @@ namespace AzureADConnectConfigDocumenter
                 var config = pilotConfig ? this.PilotXml : this.ProductionXml;
                 var dataSet = pilotConfig ? this.PilotDataSet : this.ProductionDataSet;
 
-                var connector = config.XPathSelectElement("//ma-data[name ='" + this.ConnectorName + "']");
+                var connector = config.XPathSelectElement(Documenter.GetConnectorXmlRootXPath(pilotConfig) + "/ma-data[name ='" + this.ConnectorName + "']");
 
                 if (connector != null)
                 {
@@ -1384,11 +2440,10 @@ namespace AzureADConnectConfigDocumenter
                     var table2 = dataSet.Tables[1];
 
                     var runProfileSteps = connector.XPathSelectElements("ma-run-data/run-configuration[name = '" + runProfileName + "']/configuration/step");
-
-                    for (var stepIndex = 1; stepIndex <= runProfileSteps.Count(); ++stepIndex)
+                    var stepIndex = 0;
+                    foreach (var runProfileStep in runProfileSteps)
                     {
-                        var runProfileStep = runProfileSteps.ElementAt(stepIndex - 1);
-
+                        ++stepIndex;
                         var runProfileStepType = ConnectorDocumenter.GetRunProfileStepType(runProfileStep.Element("step-type"));
 
                         Documenter.AddRow(table, new object[] { stepIndex, runProfileStepType });

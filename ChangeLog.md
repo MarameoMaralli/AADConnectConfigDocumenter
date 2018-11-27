@@ -8,6 +8,72 @@ All notable changes to AADConnectConfigDocumenter project will be documented in 
 
 ------------
 
+### Version 1.18.0928.0
+
+#### Fixed
+- Fixed issue where the "Download Sync Rule Changes Script" link was not working in Chrome / Firefox.
+
+------------
+
+### Version 1.18.0613.0
+
+#### Fixed
+- Fixed issue where the "Selected Attributes" section of a connector wrongly documented that an attribute had export flows configured when none existed.
+
+------------
+
+### Version 1.18.0302.0
+
+#### Changed
+- The "Hide Default Sync Rules" option selection now hides the OOB rules when not only the rule is not changed at all but also when only precedence number or tag is changed (due to upgrade / forest addition). 
+- The visibility control checkboxes are now enabled only after the browser loads the report completely. 
+
+#### Added
+- Added ability to hide "End-to-End Attribute Flows" sections.
+
+------------
+
+### Version 1.18.0131.0
+
+#### Changed
+- Changes for performance improvements.
+
+------------
+
+### Version 1.17.1023.0
+
+#### Added
+- Added ability to suppress "Metaverse Object Type" and connector "End-to-End Attribute Flows Summary" sections to speed up report generation.
+
+------------
+
+### Version 1.17.0802.0
+
+#### Added
+- Added check-box control to hide default synchronization rules.
+
+------------
+
+### Version 1.17.0703.0
+
+#### Fixed
+- Bug fix in the logic of End-to-End Attribute flows.
+
+------------
+
+### Version 1.17.0702.0
+
+#### Added
+- Added a new section for documenting End-to-End attribute flows.
+
+#### Fixed
+- Fixed tool crash when config exports have internal inconsistency when directory schema extension attributes are selected and then removed.
+
+#### Changed
+- Table widths in various sections.
+
+------------
+
 ### Version 1.17.0412.0
 
 #### Fixed

@@ -44,14 +44,24 @@ namespace AzureADConnectConfigDocumenter
         private const string LoggerContextItemSyncRuleReportType = "Sync Rule Report Type";
 
         /// <summary>
-        /// The synchronize rule direction
+        /// The synchronization rule direction
         /// </summary>
         private SyncRuleDirection syncRuleDirection;
 
         /// <summary>
-        /// The synchronize rule report type
+        /// The synchronization rule report type
         /// </summary>
         private SyncRuleReportType syncRuleReportType;
+
+        /// <summary>
+        /// Indicates if the synchronization rule is inferred as a default sync rule
+        /// </summary>
+        private bool defaultSyncRule;
+
+        /// <summary>
+        /// Indicates if the default synchronization rule has to be visible all the time
+        /// </summary>
+        private bool defaultSyncRuleVisibility;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="SyncRuleDocumenter" /> class.
@@ -71,8 +81,10 @@ namespace AzureADConnectConfigDocumenter
             {
                 this.SyncRuleName = syncRuleName;
                 this.SyncRuleGuid = syncRuleGuid;
-                this.ReportFileName = Documenter.GetTempFilePath(this.ConnectorName + "_" + this.SyncRuleName + "_" + this.SyncRuleGuid + ".tmp.html");
-                this.ReportToCFileName = Documenter.GetTempFilePath(this.ConnectorName + "_" + this.SyncRuleName + "_" + this.SyncRuleGuid + ".TOC.tmp.html");
+                this.defaultSyncRule = false;
+                this.defaultSyncRuleVisibility = false;
+                this.ReportFileName = Documenter.GetTempFilePath(this.SyncRuleGuid + ".tmp.html");
+                this.ReportToCFileName = Documenter.GetTempFilePath(this.SyncRuleGuid + ".TOC.tmp.html");
 
                 // Set Logger call context items
                 Logger.SetContextItem(SyncRuleDocumenter.LoggerContextItemSyncRuleName, this.SyncRuleName);
@@ -189,7 +201,19 @@ namespace AzureADConnectConfigDocumenter
                     this.ProcessConnectorSyncRuleTransformations();
                 }
 
-                var noHide = this.DiffgramDataSets.Any(dataSet => !(bool)dataSet.ExtendedProperties[Documenter.CanHide]);
+                // for default rule it can be hidden if the only change is to the precedence number
+                if (this.defaultSyncRule)
+                {
+                    var filterExpression = "[Column2] <> 'Precedence' AND [Column2] <> 'Tag' AND [" + Documenter.OldColumnPrefix + "Column3] <> [Column3]";
+                    var defaultSyncRuleDescriptionChanged = this.DiffgramDataSets.Count > 0 && this.DiffgramDataSets[0].Tables[0].Select(filterExpression).Count() != 0;
+                    var defaultSyncRuleScopingFilterChanged = this.DiffgramDataSets.Count > 1 && !(bool)this.DiffgramDataSets[1].ExtendedProperties[Documenter.CanHide];
+                    var defaultSyncRuleJoinRulesChanged = this.DiffgramDataSets.Count > 2  && !(bool)this.DiffgramDataSets[2].ExtendedProperties[Documenter.CanHide];
+                    var defaultSyncRuleTransformationsChanged = this.DiffgramDataSets.Count > 3 && !(bool)this.DiffgramDataSets[3].ExtendedProperties[Documenter.CanHide];
+
+                    this.defaultSyncRuleVisibility = defaultSyncRuleDescriptionChanged || defaultSyncRuleScopingFilterChanged || defaultSyncRuleJoinRulesChanged || defaultSyncRuleTransformationsChanged;
+                }
+
+                var noHide = this.defaultSyncRule ? this.defaultSyncRuleVisibility != false : this.DiffgramDataSets.Any(dataSet => !(bool)dataSet.ExtendedProperties[Documenter.CanHide]);
 
                 if (noHide)
                 {
@@ -212,9 +236,10 @@ namespace AzureADConnectConfigDocumenter
                     }
                 }
 
+                this.WriteSyncRuleReportHeader();
+
                 try
                 {
-                    this.WriteSyncRuleReportHeader();
                     this.PrintConnectorSyncRuleDescription();
                     this.PrintConnectorSyncRuleScopingFilter();
                     this.PrintConnectorSyncRuleJoinRules();
@@ -229,6 +254,12 @@ namespace AzureADConnectConfigDocumenter
                 }
                 finally
                 {
+                    if (this.defaultSyncRule && this.defaultSyncRuleVisibility == false)
+                    {
+                        this.ReportWriter.WriteEndTag("div");
+                        this.ReportToCWriter.WriteEndTag("div");
+                    }
+
                     this.ResetDiffgram(); // reset the diffgram variables
                 }
 
@@ -259,12 +290,22 @@ namespace AzureADConnectConfigDocumenter
                 if (this.syncRuleReportType != SyncRuleReportType.AllSections)
                 {
                     bookmark += this.syncRuleReportType.ToString();
-                    this.ReportFileName = Documenter.GetTempFilePath(this.syncRuleReportType + "." + this.ConnectorName + "_" + this.SyncRuleName + "_" + this.SyncRuleGuid + ".tmp.html");
-                    this.ReportToCFileName = Documenter.GetTempFilePath(this.syncRuleReportType + "." + this.ConnectorName + "_" + this.SyncRuleName + "_" + this.SyncRuleGuid + ".TOC.tmp.html");
+                    this.ReportFileName = Documenter.GetTempFilePath(this.SyncRuleGuid + ".tmp.html");
+                    this.ReportToCFileName = Documenter.GetTempFilePath(this.SyncRuleGuid + ".TOC.tmp.html");
                 }
 
                 this.ReportWriter = new XhtmlTextWriter(new StreamWriter(this.ReportFileName));
                 this.ReportToCWriter = new XhtmlTextWriter(new StreamWriter(this.ReportToCFileName));
+
+                if (this.defaultSyncRule && this.defaultSyncRuleVisibility == false)
+                {
+                    this.ReportWriter.WriteBeginTag("div");
+                    this.ReportWriter.WriteAttribute("class", "DefaultRuleCanHide");
+                    this.ReportWriter.Write(HtmlTextWriter.TagRightChar);
+                    this.ReportToCWriter.WriteBeginTag("div");
+                    this.ReportToCWriter.WriteAttribute("class", "DefaultRuleCanHide");
+                    this.ReportToCWriter.Write(HtmlTextWriter.TagRightChar);
+                }
 
                 this.WriteSectionHeader(this.SyncRuleName, 5, bookmark, this.SyncRuleGuid);
             }
@@ -278,14 +319,15 @@ namespace AzureADConnectConfigDocumenter
         /// Gets the sync rule xpath.
         /// </summary>
         /// <param name="currentConnectorGuid">The current connector unique identifier.</param>
+        /// <param name="pilotConfig">if set to <c>true</c>, the pilot configuration is loaded. Otherwise, the production configuration is loaded.</param>
         /// <returns>
         /// The sync rule xpath.
         /// </returns>
-        private string GetSyncRuleXPath(string currentConnectorGuid)
+        private string GetSyncRuleXPath(string currentConnectorGuid, bool pilotConfig)
         {
-            Logger.Instance.WriteMethodEntry("Current Connector Guid: '{0}'.", currentConnectorGuid);
+            Logger.Instance.WriteMethodEntry("Current Connector Guid: '{0}'. Pilot Config: '{1}'.", currentConnectorGuid, pilotConfig);
 
-            var xpath = "//synchronizationRule[translate(connector, '" + Documenter.LowercaseLetters + "', '" + Documenter.UppercaseLetters + "') = '" + currentConnectorGuid + "' and name = '" + this.SyncRuleName + "'";
+            var xpath = Documenter.GetSynchronizationRuleXmlRootXPath(pilotConfig) + "/synchronizationRule[translate(connector, '" + Documenter.LowercaseLetters + "', '" + Documenter.UppercaseLetters + "') = '" + currentConnectorGuid + "' and name = '" + this.SyncRuleName + "'";
 
             try
             {
@@ -308,7 +350,7 @@ namespace AzureADConnectConfigDocumenter
             }
             finally
             {
-                Logger.Instance.WriteMethodExit("Current Connector Guid: '{0}'. XPath: '{1}'.", currentConnectorGuid, xpath);
+                Logger.Instance.WriteMethodExit("Current Connector Guid: '{0}'. Pilot Config: '{1}'. XPath: '{2}'.", currentConnectorGuid, pilotConfig, xpath);
             }
         }
 
@@ -351,13 +393,13 @@ namespace AzureADConnectConfigDocumenter
                 var config = pilotConfig ? this.PilotXml : this.ProductionXml;
                 var dataSet = pilotConfig ? this.PilotDataSet : this.ProductionDataSet;
 
-                var connector = config.XPathSelectElement("//ma-data[name ='" + this.ConnectorName + "']");
+                var connector = config.XPathSelectElement(Documenter.GetConnectorXmlRootXPath(pilotConfig) + "/ma-data[name ='" + this.ConnectorName + "']");
 
                 if (connector != null)
                 {
                     var currentConnectorGuid = ((string)connector.Element("id") ?? string.Empty).ToUpperInvariant(); // This may be pilot or production GUID
 
-                    var xpath = this.GetSyncRuleXPath(currentConnectorGuid);
+                    var xpath = this.GetSyncRuleXPath(currentConnectorGuid, pilotConfig);
 
                     var syncRule = config.XPathSelectElement(xpath);
 
@@ -366,6 +408,7 @@ namespace AzureADConnectConfigDocumenter
                         var table = dataSet.Tables[0];
 
                         this.syncRuleDirection = (SyncRuleDirection)Enum.Parse(typeof(SyncRuleDirection), (string)syncRule.Element("direction"), true);
+                        this.defaultSyncRule = ((string)syncRule.Element("immutable-tag") ?? string.Empty).StartsWith("Microsoft.", StringComparison.OrdinalIgnoreCase);
 
                         var setting = (string)syncRule.Element("name");
                         Documenter.AddRow(table, new object[] { 0, "Name", setting });
@@ -552,13 +595,13 @@ namespace AzureADConnectConfigDocumenter
                 var config = pilotConfig ? this.PilotXml : this.ProductionXml;
                 var dataSet = pilotConfig ? this.PilotDataSet : this.ProductionDataSet;
 
-                var connector = config.XPathSelectElement("//ma-data[name ='" + this.ConnectorName + "']");
+                var connector = config.XPathSelectElement(Documenter.GetConnectorXmlRootXPath(pilotConfig) + "/ma-data[name ='" + this.ConnectorName + "']");
 
                 if (connector != null)
                 {
                     var table = dataSet.Tables[0];
                     var currentConnectorGuid = ((string)connector.Element("id") ?? string.Empty).ToUpperInvariant(); // This may be pilot or production GUID
-                    var xpath = this.GetSyncRuleXPath(currentConnectorGuid) + "/synchronizationCriteria/conditions";
+                    var xpath = this.GetSyncRuleXPath(currentConnectorGuid, pilotConfig) + "/synchronizationCriteria/conditions";
 
                     var syncRuleScopingConditions = config.XPathSelectElements(xpath);
                     var conditionCount = syncRuleScopingConditions.Count();
@@ -569,9 +612,10 @@ namespace AzureADConnectConfigDocumenter
                     }
                     else
                     {
-                        for (var conditionIndex = 0; conditionIndex < conditionCount; ++conditionIndex)
+                        var conditionIndex = -1;
+                        foreach (var condition in syncRuleScopingConditions)
                         {
-                            var condition = syncRuleScopingConditions.ElementAt(conditionIndex);
+                            ++conditionIndex;
                             var scopes = condition.Elements("scope");
                             foreach (var scope in scopes)
                             {
@@ -692,13 +736,13 @@ namespace AzureADConnectConfigDocumenter
                 var config = pilotConfig ? this.PilotXml : this.ProductionXml;
                 var dataSet = pilotConfig ? this.PilotDataSet : this.ProductionDataSet;
 
-                var connector = config.XPathSelectElement("//ma-data[name ='" + this.ConnectorName + "']");
+                var connector = config.XPathSelectElement(Documenter.GetConnectorXmlRootXPath(pilotConfig) + "/ma-data[name ='" + this.ConnectorName + "']");
 
                 if (connector != null)
                 {
                     var table = dataSet.Tables[0];
                     var currentConnectorGuid = ((string)connector.Element("id") ?? string.Empty).ToUpperInvariant(); // This may be pilot or production GUID
-                    var xpath = this.GetSyncRuleXPath(currentConnectorGuid);
+                    var xpath = this.GetSyncRuleXPath(currentConnectorGuid, pilotConfig);
                     var syncRule = config.XPathSelectElement(xpath);
                     xpath += "/relationshipCriteria/conditions";
                     var syncRuleJoiningRules = config.XPathSelectElements(xpath);
@@ -712,9 +756,10 @@ namespace AzureADConnectConfigDocumenter
                     {
                         this.syncRuleDirection = (SyncRuleDirection)Enum.Parse(typeof(SyncRuleDirection), (string)syncRule.Element("direction"), true);
 
-                        for (var joinRuleIndex = 0; joinRuleIndex < joinRuleCount; ++joinRuleIndex)
+                        var joinRuleIndex = -1;
+                        foreach (var joinRule in syncRuleJoiningRules)
                         {
-                            var joinRule = syncRuleJoiningRules.ElementAt(joinRuleIndex);
+                            ++joinRuleIndex;
                             var conditions = joinRule.Elements("condition");
                             foreach (var condition in conditions)
                             {
@@ -840,13 +885,13 @@ namespace AzureADConnectConfigDocumenter
                 var config = pilotConfig ? this.PilotXml : this.ProductionXml;
                 var dataSet = pilotConfig ? this.PilotDataSet : this.ProductionDataSet;
 
-                var connector = config.XPathSelectElement("//ma-data[name ='" + this.ConnectorName + "']");
+                var connector = config.XPathSelectElement(Documenter.GetConnectorXmlRootXPath(pilotConfig) + "/ma-data[name ='" + this.ConnectorName + "']");
 
                 if (connector != null)
                 {
                     var table = dataSet.Tables[0];
                     var currentConnectorGuid = ((string)connector.Element("id") ?? string.Empty).ToUpperInvariant(); // This may be pilot or production GUID
-                    var xpath = this.GetSyncRuleXPath(currentConnectorGuid) + "/attribute-mappings/mapping";
+                    var xpath = this.GetSyncRuleXPath(currentConnectorGuid, pilotConfig) + "/attribute-mappings/mapping";
 
                     var transformations = from transformation in config.XPathSelectElements(xpath)
                                           let target = (string)transformation.Element("dest")
@@ -975,7 +1020,7 @@ namespace AzureADConnectConfigDocumenter
                 Logger.Instance.WriteInfo("Creating installation script for sync rule. Name = '{0}'. Id = '{1}'.", this.SyncRuleName, this.SyncRuleGuid);
 
                 var config = this.Environment != ConfigEnvironment.ProductionOnly ? this.PilotXml : this.ProductionXml;
-                var syncRule = config.XPathSelectElement("//synchronizationRule[id = '" + this.SyncRuleGuid + "']");
+                var syncRule = config.XPathSelectElement(Documenter.GetSynchronizationRuleXmlRootXPath(this.Environment != ConfigEnvironment.ProductionOnly) + "/synchronizationRule[id = '" + this.SyncRuleGuid + "']");
                 var script = string.Empty;
 
                 // if the sync rule is part of the default config (i.e. starts with tag "Microsoft.")
@@ -992,7 +1037,7 @@ namespace AzureADConnectConfigDocumenter
                     else
                     {
                         // This sync rule may be present only in the Pilot config OR in the Pilot as well as Production config.
-                        var connectorProduction = this.ProductionXml.XPathSelectElement("//ma-data[name ='" + this.ConnectorName + "']");
+                        var connectorProduction = this.ProductionXml.XPathSelectElement(Documenter.GetConnectorXmlRootXPath(false) + "/ma-data[name ='" + this.ConnectorName + "']");
                         if (connectorProduction == null)
                         {
                             // This sync rule is present only in the Pilot config. Give a warning.
@@ -1001,7 +1046,7 @@ namespace AzureADConnectConfigDocumenter
                         else
                         {
                             var connectorGuidProduction = ((string)connectorProduction.Element("id") ?? string.Empty).ToUpperInvariant();
-                            var syncRuleProduction = this.ProductionXml.XPathSelectElement(this.GetSyncRuleXPath(connectorGuidProduction));
+                            var syncRuleProduction = this.ProductionXml.XPathSelectElement(this.GetSyncRuleXPath(connectorGuidProduction, false));
                             if (syncRuleProduction == null)
                             {
                                 // This sync rule is present only in the Pilot config. Give a warning.
@@ -1490,9 +1535,10 @@ namespace AzureADConnectConfigDocumenter
                     var scopes = condition.Elements("scope");
 
                     var conditionVariables = "-ScopeConditions @(";
-                    for (var scopeIndex = 0; scopeIndex < scopes.Count(); ++scopeIndex)
+                    var scopeIndex = -1;
+                    foreach (var scope in scopes)
                     {
-                        var scope = scopes.ElementAt(scopeIndex);
+                        ++scopeIndex;
                         var scopeAttribute = (string)scope.Element("csAttribute");
                         var scopeOperator = (string)scope.Element("csOperator");
                         var scopeValue = (string)scope.Element("csValue");
@@ -1545,9 +1591,10 @@ namespace AzureADConnectConfigDocumenter
                     var conditions = joinRule.Elements("condition");
 
                     var conditionVariables = "-JoinConditions @(";
-                    for (var conditionIndex = 0; conditionIndex < conditions.Count(); ++conditionIndex)
+                    var conditionIndex = -1;
+                    foreach (var condition in conditions)
                     {
-                        var condition = conditions.ElementAt(conditionIndex);
+                        ++conditionIndex;
                         var csAttribute = (string)condition.Element("csAttribute");
                         var mvAttribute = (string)condition.Element("ilmAttribute");
                         var caseSensitive = (string)condition.Element("caseSensitive");

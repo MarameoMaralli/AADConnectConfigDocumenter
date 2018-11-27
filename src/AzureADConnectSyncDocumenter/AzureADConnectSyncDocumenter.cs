@@ -276,7 +276,7 @@ namespace AzureADConnectConfigDocumenter
 
                 var table = dataSet.Tables[0];
 
-                var parameters = config.XPathSelectElements("//mv-data//parameter-values/parameter");
+                var parameters = config.XPathSelectElements(Documenter.GetMetaverseXmlRootXPath(pilotConfig) + "/mv-data//parameter-values/parameter");
 
                 // Sort by name
                 parameters = from parameter in parameters
@@ -354,10 +354,8 @@ namespace AzureADConnectConfigDocumenter
 
             try
             {
-                const string XPath = "//ma-data";
-
-                var pilot = this.PilotXml.XPathSelectElements(XPath, Documenter.NamespaceManager);
-                var production = this.ProductionXml.XPathSelectElements(XPath, Documenter.NamespaceManager);
+                var pilot = this.PilotXml.XPathSelectElements(Documenter.GetConnectorXmlRootXPath(true) + "/ma-data", Documenter.NamespaceManager);
+                var production = this.ProductionXml.XPathSelectElements(Documenter.GetConnectorXmlRootXPath(false) + "/ma-data", Documenter.NamespaceManager);
 
                 // Sort by name
                 pilot = from connector in pilot
@@ -377,6 +375,11 @@ namespace AzureADConnectConfigDocumenter
                 foreach (var connector in pilot)
                 {
                     var configEnvironment = production.Any(productionConnector => (string)productionConnector.Element("name") == (string)connector.Element("name")) ? ConfigEnvironment.PilotAndProduction : ConfigEnvironment.PilotOnly;
+                    if (configEnvironment == ConfigEnvironment.PilotOnly)
+                    {
+                        Logger.Instance.WriteWarning("The connector '{0}' only exists in the first set of configuration files. If this is not expected, please edit the config files to match names of this connector in the two enviorments as instructed in the ReadMe wiki.", (string)connector.Element("name"));
+                    }
+
                     this.ProcessConnectorConfiguration(connector, configEnvironment);
                 }
 
@@ -384,6 +387,8 @@ namespace AzureADConnectConfigDocumenter
 
                 foreach (var connector in production)
                 {
+                    Logger.Instance.WriteWarning("The connector '{0}' only exists in the second set of configuration files and will be documented as a connector that is deleted from the configuration. If this is not intended, please edit the config files to match names of this connector in the two enviorments as instructed in the ReadMe wiki.", (string)connector.Element("name"));
+
                     this.ProcessConnectorConfiguration(connector, ConfigEnvironment.ProductionOnly);
                 }
             }
